@@ -1,0 +1,9 @@
+kind: user
+version: v2
+metadata:
+  name: admin
+spec:
+  roles:
+    - editor
+    - access
+  traits: {}

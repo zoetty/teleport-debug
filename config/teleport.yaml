@@ -1,0 +1,27 @@
+version: v3
+teleport:
+  auth_token: "teleport-debug-cluster-token"
+  nodename: teleport-debug
+  data_dir: /var/lib/teleport
+  log:
+    output: stderr
+    severity: DEBUG
+  auth_server: localhost
+
+auth_service:
+  enabled: true
+  cluster_name: "teleport-debug-cluster"
+  session_recording: "node"
+  authentication:
+    type: local
+  tokens:
+    - "auth,proxy,node:teleport-debug-cluster-token"
+  proxy_protocol: "off"
+  proxy_listener_mode: multiplex
+proxy_service:
+  enabled: true
+  public_addr: "localhost:3080"
+ssh_service:
+  enabled: true
+debug_service:
+  enabled: false

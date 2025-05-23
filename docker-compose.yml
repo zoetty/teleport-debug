@@ -1,0 +1,18 @@
+services:
+  teleport-debug:
+    container_name: teleport-debug
+    ports:
+      - "3022:3022" # SSH
+      - "3023:3023" # HTTPS
+      - "3025:3025" # gRPC
+      - "3080:3080" # Web UI
+    volumes:
+      - ./data:/var/lib/teleport
+      - ./config:/etc/teleport
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile
+volumes:
+  teleport-data:
+  teleport-config:
