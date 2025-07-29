@@ -230,12 +230,15 @@ done:
 
 ## Why Issues Do Not Arise with Windows ssh-agent and SSH Clients
 
-SSH clients open a new communication channel for each request to `ssh-agent`. This ensures that even if the connection is lost due to a failed `session-bind@openssh.com` request, subsequent requests will reconnect, preventing issues from surfacing.
+The implementation of SSH clients does not differ significantly between the official and Windows versions, except for OS-specific adaptations.
+
+SSH clients open a communication channel for each request to `ssh-agent`.
 
 - Windows uses NamedPipe.
 - *nix uses Unix Domain Socket.
 
-For example, the `ssh-add -l` equivalent request involves opening a new connection each time. This behavior ensures resilience against connection failures.
+For example, the processing of a request equivalent to `ssh-add -l` is as follows:
+The process involves calling `get_agent_identities` -> `get_agent_authentication_socket` -> `get_agent_authentication_socket_path`, and each time, `socket`/`connect` is invoked to establish a connection.
 
 https://github.com/openssh/openssh-portable/blob/73ef0563a59f90324f8426c017f38e20341b555f/sshconnect2.c#L1629-L1658
 
@@ -245,32 +248,32 @@ static int
 get_agent_identities(struct ssh *ssh, int *agent_fdp,
     struct ssh_identitylist **idlistp)
 {
-	int r, agent_fd;
-	struct ssh_identitylist *idlist;
+    int r, agent_fd;
+    struct ssh_identitylist *idlist;
 
 
-	if ((r = ssh_get_authentication_socket(&agent_fd)) != 0) {
-		if (r != SSH_ERR_AGENT_NOT_PRESENT)
-			debug_fr(r, "ssh_get_authentication_socket");
-		return r;
-	}
-	if ((r = ssh_agent_bind_hostkey(agent_fd, ssh->kex->initial_hostkey,
-	    ssh->kex->session_id, ssh->kex->initial_sig, 0)) == 0)
-		debug_f("bound agent to hostkey");
-	else
-		debug2_fr(r, "ssh_agent_bind_hostkey");
+    if ((r = ssh_get_authentication_socket(&agent_fd)) != 0) {
+        if (r != SSH_ERR_AGENT_NOT_PRESENT)
+            debug_fr(r, "ssh_get_authentication_socket");
+        return r;
+    }
+    if ((r = ssh_agent_bind_hostkey(agent_fd, ssh->kex->initial_hostkey,
+        ssh->kex->session_id, ssh->kex->initial_sig, 0)) == 0)
+        debug_f("bound agent to hostkey");
+    else
+        debug2_fr(r, "ssh_agent_bind_hostkey");
 
 
-	if ((r = ssh_fetch_identitylist(agent_fd, &idlist)) != 0) {
-		debug_fr(r, "ssh_fetch_identitylist");
-		close(agent_fd);
-		return r;
-	}
-	/* success */
-	*agent_fdp = agent_fd;
-	*idlistp = idlist;
-	debug_f("agent returned %zu keys", idlist->nkeys);
-	return 0;
+    if ((r = ssh_fetch_identitylist(agent_fd, &idlist)) != 0) {
+        debug_fr(r, "ssh_fetch_identitylist");
+        close(agent_fd);
+        return r;
+    }
+    /* success */
+    *agent_fdp = agent_fd;
+    *idlistp = idlist;
+    debug_f("agent returned %zu keys", idlist->nkeys);
+    return 0;
 }
 ```
 
@@ -279,19 +282,19 @@ https://github.com/openssh/openssh-portable/blob/73ef0563a59f90324f8426c017f38e2
 int
 ssh_get_authentication_socket(int *fdp)
 {
-	const char *authsocket;
+    const char *authsocket;
 
 
-	if (fdp != NULL)
-		*fdp = -1;
+    if (fdp != NULL)
+        *fdp = -1;
 
 
-	authsocket = getenv(SSH_AUTHSOCKET_ENV_NAME);
-	if (authsocket == NULL || *authsocket == '\0')
-		return SSH_ERR_AGENT_NOT_PRESENT;
+    authsocket = getenv(SSH_AUTHSOCKET_ENV_NAME);
+    if (authsocket == NULL || *authsocket == '\0')
+        return SSH_ERR_AGENT_NOT_PRESENT;
 
 
-	return ssh_get_authentication_socket_path(authsocket, fdp);
+    return ssh_get_authentication_socket_path(authsocket, fdp);
 }
 ```
 
@@ -299,34 +302,34 @@ https://github.com/openssh/openssh-portable/blob/73ef0563a59f90324f8426c017f38e2
 ```C
 ssh_get_authentication_socket_path(const char *authsocket, int *fdp)
 {
-	int sock, oerrno;
-	struct sockaddr_un sunaddr;
+    int sock, oerrno;
+    struct sockaddr_un sunaddr;
 
 
-	debug3_f("path '%s'", authsocket);
-	memset(&sunaddr, 0, sizeof(sunaddr));
-	sunaddr.sun_family = AF_UNIX;
-	strlcpy(sunaddr.sun_path, authsocket, sizeof(sunaddr.sun_path));
+    debug3_f("path '%s'", authsocket);
+    memset(&sunaddr, 0, sizeof(sunaddr));
+    sunaddr.sun_family = AF_UNIX;
+    strlcpy(sunaddr.sun_path, authsocket, sizeof(sunaddr.sun_path));
 
 
-	if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
-		return SSH_ERR_SYSTEM_ERROR;
+    if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
+        return SSH_ERR_SYSTEM_ERROR;
 
 
-	/* close on exec */
-	if (fcntl(sock, F_SETFD, FD_CLOEXEC) == -1 ||
-	    connect(sock, (struct sockaddr *)&sunaddr, sizeof(sunaddr)) == -1) {
-		oerrno = errno;
-		close(sock);
-		errno = oerrno;
-		return SSH_ERR_SYSTEM_ERROR;
-	}
-	if (fdp != NULL)
-		*fdp = sock;
-	else
-		close(sock);
-	return 0;
+    /* close on exec */
+    if (fcntl(sock, F_SETFD, FD_CLOEXEC) == -1 ||
+        connect(sock, (struct sockaddr *)&sunaddr, sizeof(sunaddr)) == -1) {
+        oerrno = errno;
+        close(sock);
+        errno = oerrno;
+        return SSH_ERR_SYSTEM_ERROR;
+    }
+    if (fdp != NULL)
+        *fdp = sock;
+    else
+        close(sock);
+    return 0;
 }
 ```
 
-Therefore, even if `session-bind@openssh.com` fails and the connection to `ssh-agent` is lost due to some issue, the next agent request will reconnect, preventing the problem from surfacing.
+Therefore, even if `session-bind@openssh.com` fails and the connection to `ssh-agent` is lost due to some issue, the next agent request will reconnect,
